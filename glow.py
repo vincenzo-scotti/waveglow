@@ -90,7 +90,7 @@ class Invertible1x1Conv(torch.nn.Module):
                 # Reverse computation
                 W_inverse = W.float().inverse()
                 W_inverse = Variable(W_inverse[..., None])
-                if z.type() == 'torch.cuda.HalfTensor':
+                if z.type() == 'torch.cuda.HalfTensor' or z.type() == 'torch.HalfTensor':
                     W_inverse = W_inverse.half()
                 self.W_inverse = W_inverse
             z = F.conv1d(z, self.W_inverse, bias=None, stride=1, padding=0)
@@ -162,7 +162,7 @@ class WN(torch.nn.Module):
             spect_offset = i*2*self.n_channels
             acts = fused_add_tanh_sigmoid_multiply(
                 self.in_layers[i](audio),
-                spect[:,spect_offset:spect_offset+2*self.n_channels,:],
+                spect[:, spect_offset:spect_offset+2*self.n_channels,:],
                 n_channels_tensor)
 
             res_skip_acts = self.res_skip_layers[i](acts)
@@ -227,15 +227,15 @@ class WaveGlow(torch.nn.Module):
 
         for k in range(self.n_flows):
             if k % self.n_early_every == 0 and k > 0:
-                output_audio.append(audio[:,:self.n_early_size,:])
-                audio = audio[:,self.n_early_size:,:]
+                output_audio.append(audio[:, :self.n_early_size, :])
+                audio = audio[:, self.n_early_size:, :]
 
             audio, log_det_W = self.convinv[k](audio)
             log_det_W_list.append(log_det_W)
 
             n_half = int(audio.size(1)/2)
-            audio_0 = audio[:,:n_half,:]
-            audio_1 = audio[:,n_half:,:]
+            audio_0 = audio[:, :n_half, :]
+            audio_1 = audio[:, n_half:, :]
 
             output = self.WN[k]((audio_0, spect))
             log_s = output[:, n_half:, :]
@@ -243,10 +243,10 @@ class WaveGlow(torch.nn.Module):
             audio_1 = torch.exp(log_s)*audio_1 + b
             log_s_list.append(log_s)
 
-            audio = torch.cat([audio_0, audio_1],1)
+            audio = torch.cat([audio_0, audio_1], 1)
 
         output_audio.append(audio)
-        return torch.cat(output_audio,1), log_s_list, log_det_W_list
+        return torch.cat(output_audio, 1), log_s_list, log_det_W_list
 
     def infer(self, spect, sigma=1.0):
         spect = self.upsample(spect)
@@ -257,21 +257,16 @@ class WaveGlow(torch.nn.Module):
         spect = spect.unfold(2, self.n_group, self.n_group).permute(0, 2, 1, 3)
         spect = spect.contiguous().view(spect.size(0), spect.size(1), -1).permute(0, 2, 1)
 
-        if spect.type() == 'torch.cuda.HalfTensor':
-            audio = torch.cuda.HalfTensor(spect.size(0),
-                                          self.n_remaining_channels,
-                                          spect.size(2)).normal_()
-        else:
-            audio = torch.cuda.FloatTensor(spect.size(0),
-                                           self.n_remaining_channels,
-                                           spect.size(2)).normal_()
+        audio = torch.normal(
+            0, 1, (spect.size(0), self.n_remaining_channels, spect.size(2)), device=spect.device
+        ).type(spect.type())
 
         audio = torch.autograd.Variable(sigma*audio)
 
         for k in reversed(range(self.n_flows)):
             n_half = int(audio.size(1)/2)
-            audio_0 = audio[:,:n_half,:]
-            audio_1 = audio[:,n_half:,:]
+            audio_0 = audio[:, :n_half, :]
+            audio_1 = audio[:, n_half:, :]
 
             output = self.WN[k]((audio_0, spect))
 
@@ -283,14 +278,14 @@ class WaveGlow(torch.nn.Module):
             audio = self.convinv[k](audio, reverse=True)
 
             if k % self.n_early_every == 0 and k > 0:
-                if spect.type() == 'torch.cuda.HalfTensor':
-                    z = torch.cuda.HalfTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                else:
-                    z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
-                audio = torch.cat((sigma*z, audio),1)
 
+                z = torch.normal(
+                    0, 1, (spect.size(0), self.n_early_size, spect.size(2)), device=spect.device
+                ).type(spect.type())
 
-        audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
+                audio = torch.cat((sigma*z, audio), 1)
+
+        audio = audio.permute(0, 2, 1).contiguous().view(audio.size(0), -1).data
         return audio
 
     @staticmethod
