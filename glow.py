@@ -289,6 +289,7 @@ class WaveGlow(torch.nn.Module):
                     z = torch.cuda.FloatTensor(spect.size(0), self.n_early_size, spect.size(2)).normal_()
                 audio = torch.cat((sigma*z, audio),1)
 
+
         audio = audio.permute(0,2,1).contiguous().view(audio.size(0), -1).data
         return audio
 
